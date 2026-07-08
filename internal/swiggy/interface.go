@@ -13,9 +13,9 @@ type Client interface {
 
 	// --- FOOD & INSTAMART DOMAIN ---
 
-	PlaceFoodOrder(ctx context.Context, paymentMethod string) (orderID string, err error)
+	PlaceFoodOrder(ctx context.Context, paymentMethod string, addressId string) (orderID string, err error)
 
-	CheckoutInstamart(ctx context.Context, paymentMethod string) (orderID string, err error)
+	CheckoutInstamart(ctx context.Context, paymentMethod string, addressId string) (orderID string, err error)
 
 	CancelOrder(ctx context.Context, orderID string) error
 
