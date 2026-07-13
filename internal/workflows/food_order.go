@@ -14,21 +14,19 @@ type FoodOrderRequest struct {
 	CouponCode    string `json:"couponCode,omitempty"`
 }
 
-// FoodOrderWorkflow handles the complex flow of placing a food order.
+// FoodOrderWorkflow orchestrates placing a food order.
 type FoodOrderWorkflow struct {
-	foodAPI *swiggy.FoodAPI
+	foodAPI swiggy.FoodClient
 	store   saga.Store
 }
 
-func NewFoodOrderWorkflow(foodAPI *swiggy.FoodAPI, store saga.Store) *FoodOrderWorkflow {
+func NewFoodOrderWorkflow(foodAPI swiggy.FoodClient, store saga.Store) *FoodOrderWorkflow {
 	return &FoodOrderWorkflow{foodAPI: foodAPI, store: store}
 }
 
-// Execute triggers the food order saga.
 func (f *FoodOrderWorkflow) Execute(ctx context.Context, req FoodOrderRequest) error {
 	steps := []saga.Step{}
 
-	// 1. Validate and apply discount (if provided)
 	if req.CouponCode != "" {
 		steps = append(steps, saga.Step{
 			Name: "ApplyCoupon",
@@ -46,7 +44,6 @@ func (f *FoodOrderWorkflow) Execute(ctx context.Context, req FoodOrderRequest) e
 		})
 	}
 
-	// 2. Execute final checkout mutation
 	steps = append(steps, saga.Step{
 		Name: "PlaceFoodOrder",
 		Execute: func(ctx context.Context) error {
@@ -57,8 +54,7 @@ func (f *FoodOrderWorkflow) Execute(ctx context.Context, req FoodOrderRequest) e
 			return err
 		},
 		Compensate: func(ctx context.Context) error {
-			// Swiggy docs say food orders can't be cancelled programmatically via MCP,
-			// user must call customer care. We report this error to Swiggy telemetry/support.
+			// food orders aren't cancellable via MCP; report to Swiggy support instead
 			return f.foodAPI.ReportError(ctx, swiggy.ReportErrorRequest{
 				Code:    swiggy.ErrCodeInternalError,
 				Message: "Food order placement failed during saga.",

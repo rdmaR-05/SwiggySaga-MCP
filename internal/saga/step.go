@@ -9,7 +9,7 @@ var (
 	ErrSagaSuspended = errors.New("saga execution suspended pending external callback")
 )
 
-// Step defines the atomic contract for a distributed transaction boundary, ensuring paired forward (Execute) and rollback (Compensate) mutations.
+// Step is a unit of work in a saga with a paired compensation for rollback.
 type Step struct {
 	Name       string
 	Execute    func(ctx context.Context) error

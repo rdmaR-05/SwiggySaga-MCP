@@ -2,13 +2,13 @@ package swiggy
 
 import "context"
 
-// MCPRequestWrapper encapsulates tool execution payloads for Swiggy's internal JSON-RPC bridge.
+// MCPRequestWrapper is the envelope for Swiggy MCP tool calls.
 type MCPRequestWrapper struct {
 	Name      string      `json:"name"`
 	Arguments interface{} `json:"arguments"`
 }
 
-// FoodAPI provides strongly-typed bindings for the Swiggy Food ordering domain.
+// FoodAPI wraps APIClient with typed methods for the Food domain.
 type FoodAPI struct {
 	client *APIClient
 }

@@ -14,11 +14,11 @@ type DineoutBookingRequest struct {
 }
 
 type DineoutBookingWorkflow struct {
-	dineoutAPI *swiggy.DineoutAPI
+	dineoutAPI swiggy.DineoutClient
 	store      saga.Store
 }
 
-func NewDineoutBookingWorkflow(api *swiggy.DineoutAPI, store saga.Store) *DineoutBookingWorkflow {
+func NewDineoutBookingWorkflow(api swiggy.DineoutClient, store saga.Store) *DineoutBookingWorkflow {
 	return &DineoutBookingWorkflow{dineoutAPI: api, store: store}
 }
 
@@ -31,7 +31,6 @@ func (w *DineoutBookingWorkflow) Execute(ctx context.Context, req DineoutBooking
 func (w *DineoutBookingWorkflow) getSteps(req DineoutBookingRequest, cartID string) []saga.Step {
 	steps := []saga.Step{}
 
-	// 1. Initialize Dineout session
 	steps = append(steps, saga.Step{
 		Name: "CreateCart",
 		Execute: func(ctx context.Context) error {
@@ -53,7 +52,6 @@ func (w *DineoutBookingWorkflow) getSteps(req DineoutBookingRequest, cartID stri
 		},
 	})
 
-	// 2. Reserve specific timeslot (suspends on pending status)
 	steps = append(steps, saga.Step{
 		Name: "BookTable",
 		Execute: func(ctx context.Context) error {
@@ -79,7 +77,7 @@ func (w *DineoutBookingWorkflow) getSteps(req DineoutBookingRequest, cartID stri
 
 // Resume allows resuming a suspended dineout booking when a webhook fires.
 func (w *DineoutBookingWorkflow) Resume(ctx context.Context, sagaID string, req DineoutBookingRequest) error {
-	// In a real scenario, we'd load cartID from DB state. For MVP, pass empty and assume success.
+	// TODO: load cartID from SagaState.Metadata on resume instead of passing a placeholder
 	steps := w.getSteps(req, "resumed_cart_id")
 	orchestrator := saga.NewOrchestrator("DineoutBookingWorkflow", steps, w.store)
 	return orchestrator.Resume(ctx, sagaID)

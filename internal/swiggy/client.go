@@ -19,7 +19,7 @@ var (
 	ErrNetworkTimeout = errors.New("network timeout occurred while waiting for upstream response")
 )
 
-// APIClient is the Swiggy API client for executing MCP tools natively in Go.
+// APIClient is an HTTP client for the Swiggy MCP platform with circuit-breaker support.
 type APIClient struct {
 	httpClient *http.Client
 	baseURL    string
@@ -27,13 +27,13 @@ type APIClient struct {
 	breaker    *gobreaker.CircuitBreaker
 }
 
-// NewAPIClient initializes an HTTP client wrapped with a circuit breaker for fault-tolerant upstream communication.
+// NewAPIClient returns a new Swiggy API client with circuit-breaker defaults.
 func NewAPIClient(baseURL, token string) *APIClient {
 	st := gobreaker.Settings{
 		Name:        "SwiggyAPI",
-		MaxRequests: 3,                // Max requests allowed in half-open state
-		Interval:    10 * time.Second, // Time to keep counts
-		Timeout:     30 * time.Second, // Time circuit stays open before half-open
+		MaxRequests: 3,
+		Interval:    10 * time.Second,
+		Timeout:     30 * time.Second,
 		ReadyToTrip: func(counts gobreaker.Counts) bool {
 			return counts.ConsecutiveFailures >= 5
 		},
@@ -49,7 +49,7 @@ func NewAPIClient(baseURL, token string) *APIClient {
 	}
 }
 
-// BasePost executes a mutating POST request to the Swiggy endpoint.
+// BasePost sends a POST to endpoint and unmarshals the MCP response into out.
 func (c *APIClient) BasePost(ctx context.Context, endpoint string, payload interface{}, out interface{}) error {
 	_, err := c.breaker.Execute(func() (interface{}, error) {
 		url := fmt.Sprintf("%s%s", c.baseURL, endpoint)
@@ -88,7 +88,6 @@ func (c *APIClient) BasePost(ctx context.Context, endpoint string, payload inter
 			return nil, parseSwiggyError(resp.StatusCode, baseResp)
 		}
 
-		// Extract and map the domain-specific payload if an output schema is provided.
 		if out != nil && len(baseResp.Data) > 0 {
 			if err := json.Unmarshal(baseResp.Data, out); err != nil {
 				return nil, fmt.Errorf("failed to unmarshal success payload: %w", err)
@@ -108,7 +107,6 @@ func (c *APIClient) BasePost(ctx context.Context, endpoint string, payload inter
 }
 
 func parseSwiggyError(statusCode int, baseResp BaseResponse) *APIError {
-	// Prioritize explicit error codes as per the roadmap schema.
 	if baseResp.Error != nil && baseResp.Error.Code != "" {
 		return &APIError{Code: baseResp.Error.Code, Message: baseResp.Error.Message}
 	}
@@ -118,7 +116,7 @@ func parseSwiggyError(statusCode int, baseResp BaseResponse) *APIError {
 		msg = baseResp.Error.Message
 	}
 
-	// Fallback heuristics: bucket errors into actionable categories based on HTTP status and message prefixes.
+	// bucket by HTTP status when no structured error code is present
 	if statusCode == 401 {
 		return &APIError{Code: ErrCodeUnauthenticated, Message: msg}
 	}
@@ -137,7 +135,6 @@ func parseSwiggyError(statusCode int, baseResp BaseResponse) *APIError {
 		return &APIError{Code: ErrCodeInternalError, Message: msg}
 	}
 	if !baseResp.Success {
-		// Domain failure
 		return &APIError{Code: "DOMAIN_FAILURE", Message: msg}
 	}
 

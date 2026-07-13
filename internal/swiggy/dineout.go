@@ -2,7 +2,7 @@ package swiggy
 
 import "context"
 
-// DineoutAPI provides strongly-typed bindings for the Swiggy Dineout table reservation domain.
+// DineoutAPI wraps APIClient with typed methods for the Dineout domain.
 type DineoutAPI struct {
 	client *APIClient
 }

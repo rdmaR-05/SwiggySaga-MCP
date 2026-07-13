@@ -37,7 +37,7 @@ func NewOrchestrator(name string, steps []Step, store Store) *Orchestrator {
 	}
 }
 
-// Run executes the Saga DAG sequentially. On failure, it triggers deterministic compensations (LIFO order).
+// Run executes saga steps in order. On any failure it compensates in reverse and returns the step error.
 func (o *Orchestrator) Run(ctx context.Context) error {
 	ctx, span := otel.Tracer("swiggy.saga.mcp").Start(ctx, "Orchestrator.Run")
 	span.SetAttributes(attribute.String("saga.id", o.ID), attribute.String("saga.name", o.Name))
@@ -84,7 +84,6 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 			state.Status = "failed"
 			o.Store.SaveState(ctx, state)
 
-			// Rollback phase
 			slog.Info("Initiating Saga Rollback", "saga_id", o.ID, "saga_name", o.Name, "failed_step", step.Name)
 			rollbackErr := o.rollback(ctx, executedSteps)
 			
@@ -162,7 +161,7 @@ func executeStepWithRetry(ctx context.Context, fn func(ctx context.Context) erro
 	}
 }
 
-// Resume reconstructs and continues a suspended Saga from persistent state (e.g., after an async webhook callback).
+// Resume continues a suspended saga, skipping steps already recorded in persistent state.
 func (o *Orchestrator) Resume(ctx context.Context, sagaID string) error {
 	o.ID = sagaID
 	state, err := o.Store.LoadState(ctx, sagaID)
@@ -220,7 +219,7 @@ func (o *Orchestrator) Resume(ctx context.Context, sagaID string) error {
 	return nil
 }
 
-// rollback guarantees eventual consistency by executing compensation handlers in LIFO order.
+// rollback runs Compensate for each executed step in reverse order.
 func (o *Orchestrator) rollback(ctx context.Context, executedSteps []Step) error {
 	var rollbackErrors []error
 
@@ -229,7 +228,6 @@ func (o *Orchestrator) rollback(ctx context.Context, executedSteps []Step) error
 		if step.Compensate != nil {
 			slog.Info("Compensating Saga Step", "saga_name", o.Name, "step", step.Name)
 
-			// Use retry logic for compensation to ensure highest chance of rollback success
 			err := WithRetry(ctx, 3, 500*time.Millisecond, step.Compensate)
 			if err != nil {
 				slog.Error("Failed to Compensate Saga Step", "saga_name", o.Name, "step", step.Name, "error", err)

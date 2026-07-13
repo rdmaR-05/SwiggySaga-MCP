@@ -7,14 +7,14 @@ import (
 	"time"
 )
 
-// RetryableFunc is a function that returns an error which can be retried.
+// RetryableFunc is the function signature expected by WithRetry.
 type RetryableFunc func(ctx context.Context) error
 
 var (
 	ErrMaxRetriesReached = errors.New("maximum retries reached")
 )
 
-// WithRetry provides jittered exponential backoff for transient fault tolerance without overwhelming downstream services.
+// WithRetry runs fn up to maxRetries times with jittered exponential backoff.
 func WithRetry(ctx context.Context, maxRetries int, initialDelay time.Duration, fn RetryableFunc) error {
 	delay := initialDelay
 
@@ -24,12 +24,12 @@ func WithRetry(ctx context.Context, maxRetries int, initialDelay time.Duration, 
 			return nil
 		}
 
-		// If it's a context error, we should abort retries
+		// abort on context cancellation
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return err
 		}
 
-		// Calculate jitter to avoid thundering herd problem
+		// jitter to spread concurrent retries
 		jitter := time.Duration(rand.Int63n(int64(delay) / 2))
 		sleepDuration := delay + jitter
 

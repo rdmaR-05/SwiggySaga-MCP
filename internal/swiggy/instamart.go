@@ -2,7 +2,7 @@ package swiggy
 
 import "context"
 
-// InstamartAPI provides strongly-typed bindings for the Swiggy Instamart grocery domain.
+// InstamartAPI wraps APIClient with typed methods for the Instamart domain.
 type InstamartAPI struct {
 	client *APIClient
 }
@@ -35,7 +35,7 @@ func (i *InstamartAPI) ClearCart(ctx context.Context) error {
 	return i.client.BasePost(ctx, "/instamart", payload, nil)
 }
 
-// RemoveItemsFromCart removes specific items from the instamart cart (Delta Compensation).
+// RemoveItemsFromCart is the compensation step for AddItems; removes only what was added.
 func (i *InstamartAPI) RemoveItemsFromCart(ctx context.Context, items []UpdateCartRequest) error {
 	payload := MCPRequestWrapper{Name: "remove_items_from_cart", Arguments: map[string]interface{}{"items": items}}
 	return i.client.BasePost(ctx, "/instamart", payload, nil)

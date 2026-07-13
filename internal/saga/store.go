@@ -38,20 +38,18 @@ func (r *RedisStore) SaveState(ctx context.Context, state SagaState) error {
 		return err
 	}
 	
-	// Keep saga state for 7 days
 	err = r.client.Set(ctx, "saga_state:"+state.SagaID, data, 7*24*time.Hour).Err()
 	if err != nil {
 		return err
 	}
 	
-	// Register active sagas in a ZSET for async recovery daemon sweeps
 	if state.Status == "started" {
+		// track active sagas for recovery daemon sweeps
 		r.client.ZAdd(ctx, "active_sagas", redis.Z{
 			Score:  float64(state.UpdatedAt),
 			Member: state.SagaID,
 		})
 	} else {
-		// Prune terminal sagas from the active recovery tracker
 		r.client.ZRem(ctx, "active_sagas", state.SagaID)
 	}
 	
@@ -74,7 +72,6 @@ func (r *RedisStore) LoadState(ctx context.Context, sagaID string) (*SagaState, 
 func (r *RedisStore) GetStuckSagas(ctx context.Context, timeout time.Duration) ([]SagaState, error) {
 	threshold := float64(time.Now().Add(-timeout).Unix())
 	
-	// Get all saga IDs that were updated before the threshold
 	sagaIDs, err := r.client.ZRangeByScore(ctx, "active_sagas", &redis.ZRangeBy{
 		Min: "-inf",
 		Max: fmt.Sprintf("%f", threshold),

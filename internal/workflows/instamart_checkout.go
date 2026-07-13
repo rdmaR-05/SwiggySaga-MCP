@@ -15,11 +15,11 @@ type InstamartCheckoutRequest struct {
 }
 
 type InstamartCheckoutWorkflow struct {
-	instamartAPI *swiggy.InstamartAPI
+	instamartAPI swiggy.InstamartClient
 	store        saga.Store
 }
 
-func NewInstamartCheckoutWorkflow(api *swiggy.InstamartAPI, store saga.Store) *InstamartCheckoutWorkflow {
+func NewInstamartCheckoutWorkflow(api swiggy.InstamartClient, store saga.Store) *InstamartCheckoutWorkflow {
 	return &InstamartCheckoutWorkflow{instamartAPI: api, store: store}
 }
 
@@ -28,7 +28,6 @@ func (w *InstamartCheckoutWorkflow) Execute(ctx context.Context, req InstamartCh
 
 	addrID := req.AddressID
 
-	// 1. Dynamically provision delivery address if omitted
 	if req.NewAddress != nil && req.AddressID == "" {
 		steps = append(steps, saga.Step{
 			Name: "CreateAddress",
@@ -49,7 +48,6 @@ func (w *InstamartCheckoutWorkflow) Execute(ctx context.Context, req InstamartCh
 		})
 	}
 
-	// 2. Add Items to Cart
 	steps = append(steps, saga.Step{
 		Name: "AddItems",
 		Execute: func(ctx context.Context) error {
@@ -66,7 +64,6 @@ func (w *InstamartCheckoutWorkflow) Execute(ctx context.Context, req InstamartCh
 		},
 	})
 
-	// 3. Finalize Instamart cart transaction
 	steps = append(steps, saga.Step{
 		Name: "InstamartCheckout",
 		Execute: func(ctx context.Context) error {
