@@ -2,15 +2,20 @@ package handlers
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"swiggy-saga-mcp/internal/locking"
 	"swiggy-saga-mcp/internal/swiggy"
 	"swiggy-saga-mcp/internal/workflows"
-	"time"
 
 	"github.com/go-playground/validator/v10"
 	"github.com/redis/go-redis/v9"
@@ -25,6 +30,7 @@ type API struct {
 	locker            locking.Locker
 	validate          *validator.Validate
 	redisClient       *redis.Client
+	webhookSecret     string // SWIGGY_WEBHOOK_SECRET; empty disables HMAC verification
 }
 
 func NewAPI(
@@ -34,6 +40,7 @@ func NewAPI(
 	locker locking.Locker,
 	validate *validator.Validate,
 	redisClient *redis.Client,
+	webhookSecret string,
 ) *API {
 	return &API{
 		foodWorkflow:      food,
@@ -42,6 +49,7 @@ func NewAPI(
 		locker:            locker,
 		validate:          validate,
 		redisClient:       redisClient,
+		webhookSecret:     webhookSecret,
 	}
 }
 
@@ -53,6 +61,18 @@ func writeJSON(w http.ResponseWriter, status int, v interface{}) {
 
 func writeError(w http.ResponseWriter, status int, err error) {
 	writeJSON(w, status, map[string]string{"error": err.Error()})
+}
+
+// verifySwiggySignature validates an HMAC-SHA256 webhook signature.
+// Swiggy is expected to send "sha256=<hex>" in X-Swiggy-Signature.
+func verifySwiggySignature(body []byte, signature, secret string) bool {
+	if secret == "" || signature == "" {
+		return false
+	}
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write(body)
+	expected := "sha256=" + hex.EncodeToString(mac.Sum(nil))
+	return hmac.Equal([]byte(signature), []byte(expected))
 }
 
 func (api *API) HandleFoodOrder(w http.ResponseWriter, r *http.Request) {
@@ -143,7 +163,7 @@ func (api *API) HandleDineoutBooking(w http.ResponseWriter, r *http.Request) {
 
 	// Lock the exact restaurant slot to prevent double booking concurrently
 	lockKey := fmt.Sprintf("dineout_%s_%s", req.RestaurantID, req.SlotID)
-	
+
 	acquired, err := api.locker.AcquireLock(r.Context(), lockKey, 30*time.Second)
 	if err != nil || !acquired {
 		writeError(w, http.StatusTooManyRequests, locking.ErrLockFailed)
@@ -178,8 +198,23 @@ type WebhookPayload struct {
 }
 
 func (api *API) HandleSwiggyWebhook(w http.ResponseWriter, r *http.Request) {
+	// Read body first so we can verify the signature over the raw bytes.
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+
+	// Reject if a secret is configured but the signature doesn't match.
+	if api.webhookSecret != "" {
+		if !verifySwiggySignature(body, r.Header.Get("X-Swiggy-Signature"), api.webhookSecret) {
+			writeError(w, http.StatusUnauthorized, errors.New("invalid webhook signature"))
+			return
+		}
+	}
+
 	var payload WebhookPayload
-	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+	if err := json.Unmarshal(body, &payload); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
@@ -190,10 +225,11 @@ func (api *API) HandleSwiggyWebhook(w http.ResponseWriter, r *http.Request) {
 			SlotID:       payload.SlotID,
 			Guests:       payload.Guests,
 		}
-		
+
 		go func() {
-			err := api.dineoutWorkflow.Resume(context.Background(), payload.SagaID, req)
-			if err != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			if err := api.dineoutWorkflow.Resume(ctx, payload.SagaID, req); err != nil {
 				slog.Error("Failed to resume saga from webhook", "saga_id", payload.SagaID, "error", err)
 			}
 		}()

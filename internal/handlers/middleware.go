@@ -35,6 +35,21 @@ func (rw *responseRecorder) Write(b []byte) (int, error) {
 	return rw.ResponseWriter.Write(b)
 }
 
+// PanicRecoveryMiddleware catches handler panics and returns a 500 rather than crashing the process.
+func PanicRecoveryMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			if rec := recover(); rec != nil {
+				slog.Error("handler panic recovered", "panic", rec, "path", r.URL.Path)
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusInternalServerError)
+				w.Write([]byte(`{"error":"internal server error"}`))
+			}
+		}()
+		next.ServeHTTP(w, r)
+	})
+}
+
 // IdempotencyMiddleware short-circuits duplicate requests using a Redis-backed response cache.
 // Callers that don't send an Idempotency-Key header, or when Redis is unavailable, pass through unchanged.
 func IdempotencyMiddleware(redisClient *redis.Client) func(http.HandlerFunc) http.HandlerFunc {
@@ -43,6 +58,13 @@ func IdempotencyMiddleware(redisClient *redis.Client) func(http.HandlerFunc) htt
 			idempKey := r.Header.Get("Idempotency-Key")
 			if idempKey == "" || redisClient == nil {
 				next(w, r)
+				return
+			}
+			// cap key length to prevent unbounded Redis key sizes
+			if len(idempKey) > 128 {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusBadRequest)
+				w.Write([]byte(`{"error":"Idempotency-Key exceeds maximum length of 128 characters"}`))
 				return
 			}
 

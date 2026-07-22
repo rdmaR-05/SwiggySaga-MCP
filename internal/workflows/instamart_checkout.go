@@ -11,7 +11,7 @@ type InstamartCheckoutRequest struct {
 	Items         []swiggy.UpdateCartRequest   `json:"items" validate:"required,min=1,dive"`
 	AddressID     string                       `json:"addressId,omitempty"` // Existing or Empty if new
 	NewAddress    *swiggy.CreateAddressRequest `json:"newAddress,omitempty"`
-	PaymentMethod string                       `json:"paymentMethod,omitempty"`
+	PaymentMethod string                       `json:"paymentMethod" validate:"required"`
 }
 
 type InstamartCheckoutWorkflow struct {

@@ -10,7 +10,7 @@ import (
 // FoodOrderRequest represents the input for a food order saga.
 type FoodOrderRequest struct {
 	AddressID     string `json:"addressId" validate:"required"`
-	PaymentMethod string `json:"paymentMethod,omitempty"`
+	PaymentMethod string `json:"paymentMethod" validate:"required"`
 	CouponCode    string `json:"couponCode,omitempty"`
 }
 
