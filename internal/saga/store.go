@@ -10,11 +10,12 @@ import (
 )
 
 type SagaState struct {
-	SagaID        string   `json:"saga_id"`
-	Name          string   `json:"name"`
-	Status        string   `json:"status"` // "started", "completed", "failed", "rolled_back"
-	ExecutedSteps []string `json:"executed_steps"`
-	UpdatedAt     int64    `json:"updated_at"`
+	SagaID        string            `json:"saga_id"`
+	Name          string            `json:"name"`
+	Status        string            `json:"status"` // started | completed | failed | rolled_back | suspended | unknown
+	ExecutedSteps []string          `json:"executed_steps"`
+	Metadata      map[string]string `json:"metadata,omitempty"`
+	UpdatedAt     int64             `json:"updated_at"`
 }
 
 type Store interface {
@@ -84,9 +85,14 @@ func (r *RedisStore) GetStuckSagas(ctx context.Context, timeout time.Duration) (
 	var stuckSagas []SagaState
 	for _, id := range sagaIDs {
 		state, err := r.LoadState(ctx, id)
-		if err == nil && state != nil {
-			stuckSagas = append(stuckSagas, *state)
+		if err != nil || state == nil {
+			continue
 		}
+		// suspended sagas are legitimately waiting for a webhook; skip them
+		if state.Status == "suspended" {
+			continue
+		}
+		stuckSagas = append(stuckSagas, *state)
 	}
 	return stuckSagas, nil
 }
@@ -94,5 +100,9 @@ func (r *RedisStore) GetStuckSagas(ctx context.Context, timeout time.Duration) (
 type NoOpStore struct{}
 
 func (n *NoOpStore) SaveState(ctx context.Context, state SagaState) error { return nil }
-func (n *NoOpStore) LoadState(ctx context.Context, sagaID string) (*SagaState, error) { return nil, nil }
-func (n *NoOpStore) GetStuckSagas(ctx context.Context, timeout time.Duration) ([]SagaState, error) { return nil, nil }
+func (n *NoOpStore) LoadState(ctx context.Context, sagaID string) (*SagaState, error) {
+	return nil, nil
+}
+func (n *NoOpStore) GetStuckSagas(ctx context.Context, timeout time.Duration) ([]SagaState, error) {
+	return nil, nil
+}
