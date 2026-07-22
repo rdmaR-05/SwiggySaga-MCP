@@ -17,10 +17,11 @@ import (
 
 // Orchestrator is the core state machine for distributed Saga transactions.
 type Orchestrator struct {
-	ID    string
-	Name  string
-	Steps []Step
-	Store Store
+	ID       string
+	Name     string
+	Steps    []Step
+	Store    Store
+	Metadata map[string]string // shared kv bag; step closures write, orchestrator persists
 }
 
 // NewOrchestrator initializes a Saga state machine bound to a durable store.
@@ -30,11 +31,18 @@ func NewOrchestrator(name string, steps []Step, store Store) *Orchestrator {
 		store = &NoOpStore{}
 	}
 	return &Orchestrator{
-		ID:    id,
-		Name:  name,
-		Steps: steps,
-		Store: store,
+		ID:       id,
+		Name:     name,
+		Steps:    steps,
+		Store:    store,
+		Metadata: make(map[string]string),
 	}
+}
+
+// SetMetadata records a key-value pair that will be persisted with the saga state.
+// Step closures call this to stash intermediate results (e.g. cartID) for later steps or resume.
+func (o *Orchestrator) SetMetadata(key, value string) {
+	o.Metadata[key] = value
 }
 
 // Run executes saga steps in order. On any failure it compensates in reverse and returns the step error.
@@ -54,10 +62,16 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 		Name:          o.Name,
 		Status:        "started",
 		ExecutedSteps: []string{},
+		Metadata:      o.Metadata,
 	}
 	o.Store.SaveState(ctx, state)
 
 	for _, step := range o.Steps {
+		if ctx.Err() != nil {
+			state.Status = "failed"
+			o.Store.SaveState(ctx, state)
+			return ctx.Err()
+		}
 		slog.Info("Executing Saga Step", "saga_id", o.ID, "saga_name", o.Name, "step", step.Name)
 		
 		stepCtx, stepSpan := otel.Tracer("swiggy.saga.mcp").Start(ctx, "Step."+step.Name)
@@ -198,10 +212,17 @@ func (o *Orchestrator) Resume(ctx context.Context, sagaID string) error {
 		slog.Info("Executing Saga Step (Resumed)", "saga_id", o.ID, "saga_name", o.Name, "step", step.Name)
 		
 		stepCtx, stepSpan := otel.Tracer("swiggy.saga.mcp").Start(ctx, "Step."+step.Name)
-		err := step.Execute(stepCtx)
+		err := executeStepWithRetry(stepCtx, step.Execute)
 		stepSpan.End()
 
 		if err != nil {
+			if errors.Is(err, ErrSagaSuspended) {
+				slog.Info("Saga Re-Suspended", "saga_id", o.ID, "step", step.Name)
+				state.Status = "suspended"
+				o.Store.SaveState(ctx, *state)
+				return err
+			}
+
 			state.Status = "failed"
 			o.Store.SaveState(ctx, *state)
 			o.rollback(ctx, executedSteps)
