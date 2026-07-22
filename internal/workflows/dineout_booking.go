@@ -2,6 +2,7 @@ package workflows
 
 import (
 	"context"
+	"fmt"
 
 	"swiggy-saga-mcp/internal/saga"
 	"swiggy-saga-mcp/internal/swiggy"
@@ -23,19 +24,22 @@ func NewDineoutBookingWorkflow(api swiggy.DineoutClient, store saga.Store) *Dine
 }
 
 func (w *DineoutBookingWorkflow) Execute(ctx context.Context, req DineoutBookingRequest) error {
-	steps := w.getSteps(req, "")
-	orchestrator := saga.NewOrchestrator("DineoutBookingWorkflow", steps, w.store)
+	var cartID string
+	orchestrator := saga.NewOrchestrator("DineoutBookingWorkflow", nil, w.store)
+	orchestrator.Steps = w.buildSteps(req, &cartID, orchestrator)
 	return orchestrator.Run(ctx)
 }
 
-func (w *DineoutBookingWorkflow) getSteps(req DineoutBookingRequest, cartID string) []saga.Step {
+// buildSteps constructs saga steps with a shared cartID pointer.
+// The orchestrator reference lets steps persist metadata for resume.
+func (w *DineoutBookingWorkflow) buildSteps(req DineoutBookingRequest, cartID *string, orch *saga.Orchestrator) []saga.Step {
 	steps := []saga.Step{}
 
 	steps = append(steps, saga.Step{
 		Name: "CreateCart",
 		Execute: func(ctx context.Context) error {
-			if cartID != "" {
-				return nil // skip if already created (e.g. during resume)
+			if *cartID != "" {
+				return nil // already created (e.g. during resume)
 			}
 			resp, err := w.dineoutAPI.CreateCart(ctx, swiggy.CreateCartRequest{
 				RestaurantID: req.RestaurantID,
@@ -44,7 +48,8 @@ func (w *DineoutBookingWorkflow) getSteps(req DineoutBookingRequest, cartID stri
 			if err != nil {
 				return err
 			}
-			cartID = resp.CartID
+			*cartID = resp.CartID
+			orch.SetMetadata("cartId", *cartID)
 			return nil
 		},
 		Compensate: func(ctx context.Context) error {
@@ -59,7 +64,7 @@ func (w *DineoutBookingWorkflow) getSteps(req DineoutBookingRequest, cartID stri
 				return saga.ErrSagaSuspended
 			}
 			_, err := w.dineoutAPI.BookTable(ctx, swiggy.BookTableRequest{
-				CartID: cartID,
+				CartID: *cartID,
 				SlotID: req.SlotID,
 			})
 			return err
@@ -75,10 +80,20 @@ func (w *DineoutBookingWorkflow) getSteps(req DineoutBookingRequest, cartID stri
 	return steps
 }
 
-// Resume allows resuming a suspended dineout booking when a webhook fires.
+// Resume continues a suspended dineout booking when a webhook fires.
 func (w *DineoutBookingWorkflow) Resume(ctx context.Context, sagaID string, req DineoutBookingRequest) error {
-	// TODO: load cartID from SagaState.Metadata on resume instead of passing a placeholder
-	steps := w.getSteps(req, "resumed_cart_id")
-	orchestrator := saga.NewOrchestrator("DineoutBookingWorkflow", steps, w.store)
+	state, err := w.store.LoadState(ctx, sagaID)
+	if err != nil {
+		return fmt.Errorf("failed to load saga state for resume: %w", err)
+	}
+
+	// recover cartID from persisted metadata
+	cartID := ""
+	if state != nil && state.Metadata != nil {
+		cartID = state.Metadata["cartId"]
+	}
+
+	orchestrator := saga.NewOrchestrator("DineoutBookingWorkflow", nil, w.store)
+	orchestrator.Steps = w.buildSteps(req, &cartID, orchestrator)
 	return orchestrator.Resume(ctx, sagaID)
 }
