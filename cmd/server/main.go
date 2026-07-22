@@ -22,7 +22,6 @@ import (
 )
 
 func main() {
-	// Initialize OpenTelemetry
 	shutdownOTEL, err := telemetry.InitTracer()
 	if err != nil {
 		slog.Error("Failed to initialize OpenTelemetry", "error", err)
@@ -30,7 +29,6 @@ func main() {
 		defer shutdownOTEL(context.Background())
 	}
 
-	// Initialize structured logger
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
 		Level: slog.LevelDebug,
 	}))
@@ -98,21 +96,44 @@ func main() {
 	// Initialize Validator
 	validate := validator.New()
 
+	// Webhook secret — if unset, webhook auth is disabled; log a warning.
+	webhookSecret := os.Getenv("SWIGGY_WEBHOOK_SECRET")
+	if webhookSecret == "" {
+		slog.Warn("SWIGGY_WEBHOOK_SECRET not set; webhook endpoint is unauthenticated")
+	}
+
 	// Initialize Handlers
-	api := handlers.NewAPI(foodWorkflow, instamartWorkflow, dineoutWorkflow, locker, validate, redisClient)
+	api := handlers.NewAPI(foodWorkflow, instamartWorkflow, dineoutWorkflow, locker, validate, redisClient, webhookSecret)
 
 	mux := http.NewServeMux()
 	api.RegisterRoutes(mux)
 
-	// Health check endpoint
+	// Health check — returns degraded if Redis is configured but unreachable.
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if redisClient != nil {
+			if err := redisClient.Ping(r.Context()).Err(); err != nil {
+				slog.Warn("Health check: Redis unreachable", "error", err)
+				w.WriteHeader(http.StatusServiceUnavailable)
+				w.Write([]byte(`{"status":"degraded","redis":"down"}`))
+				return
+			}
+		}
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(`{"status":"ok"}`))
 	})
 
+	// Layer middleware: panic recovery → 1 MB body cap → 30 s hard deadline.
+	handler := handlers.PanicRecoveryMiddleware(http.MaxBytesHandler(mux, 1<<20))
+	handler = http.TimeoutHandler(handler, 30*time.Second, `{"error":"request timeout"}`)
+
 	server := &http.Server{
-		Addr:    ":8080",
-		Handler: mux,
+		Addr:              ":8080",
+		Handler:           handler,
+		ReadHeaderTimeout: 5 * time.Second,  // mitigate Slowloris
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      35 * time.Second, // > TimeoutHandler duration to avoid race
+		IdleTimeout:       120 * time.Second,
 	}
 
 	// Graceful shutdown
